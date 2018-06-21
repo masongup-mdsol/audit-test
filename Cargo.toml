@@ -1,0 +1,16 @@
+[package]
+name = "audit-test"
+version = "0.1.0"
+authors = ["Mason Gup <mgup@mdsol.com>"]
+
+[dependencies]
+docopt = ">= 1.0.0"
+serde = ">= 1.0.66"
+serde_derive = ">= 1.0.66"
+serde_json = ">= 1.0.21"
+rusoto_core = ">= 0.32.0"
+rusoto_kinesis = ">= 0.32.0"
+rusoto_dynamodb = ">= 0.32.0"
+uuid = { version = ">= 0.6", features = ["v4"] }
+chrono = ">= 0.4.3"
+rand = "*"
