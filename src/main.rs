@@ -7,20 +7,21 @@ use docopt::Docopt;
 mod audit_creator;
 mod audit_reader;
 
-const USAGE: &'static str = "
+const USAGE: &str = "
 Audit Test
 
 Usage:
-    audit-test create-audits [--threads=<num>] [--audits=<num>]
-    audit-test show-audit-size
-    audit-test retrieve-audits [--what-uris=<num>]
+    audit-test create-audits [--threads=<num>] [--audits=<num>] [-v]
+    audit-test show-audit-size [-v]
+    audit-test retrieve-audits [--what-uris=<num>] [-v]
     audit-test (-h | --help)
 
 Options:
-    -h --help            Show this screen
-    --threads=<num>      Number of threads to use [default: 2]
-    --audits=<num>       Number of audits to create per thread [default: 4]
-    --what-uris=<num>    Number of audits for what_uris to fetch [default: 10]
+    -h --help               Show this screen
+    -t --threads=<num>      Number of threads to use [default: 2]
+    -a --audits=<num>       Number of audits to create per thread [default: 4]
+    -u --what-uris=<num>    Number of audits for what_uris to fetch [default: 10]
+    -v --verbose            Output more details
 ";
 
 #[derive(Debug, Deserialize)]
@@ -28,6 +29,7 @@ struct Args {
     flag_threads: i32,
     flag_audits: i32,
     flag_what_uris: i32,
+    flag_verbose: bool,
     cmd_create_audits: bool,
     cmd_show_audit_size: bool,
     cmd_retrieve_audits: bool,
@@ -39,13 +41,13 @@ fn main() {
         .unwrap_or_else(|e| e.exit());
 
     if args.cmd_create_audits {
-        audit_creator::create_audits_threaded(args.flag_threads, args.flag_audits);
+        audit_creator::create_audits_threaded(args.flag_threads, args.flag_audits, args.flag_verbose);
     }
     if args.cmd_show_audit_size {
-        audit_creator::show_audit_size();
+        audit_creator::show_audit_size(args.flag_verbose);
     }
     if args.cmd_retrieve_audits {
-        audit_reader::retrieve_audits(args.flag_what_uris.into());
+        audit_reader::retrieve_audits(args.flag_what_uris.into(), args.flag_verbose);
     }
 }
 

@@ -44,12 +44,12 @@ struct Change {
     new: String,
 }
 
-pub fn create_audits_threaded(threads: i32, audits: i32) {
+pub fn create_audits_threaded(threads: i32, audits: i32, verbose: bool) {
     let start_time = chrono::Local::now();
     println!("Starting create at {}", start_time.to_rfc2822());
 
     let thread_handles: Vec<thread::JoinHandle<_>> = (0..threads).map(|thread_num| {
-        thread::spawn(move || { create_audits_grouped(audits, thread_num) })
+        thread::spawn(move || { create_audits_grouped(audits, thread_num, verbose) })
     }).collect();
 
     for handle in thread_handles {
@@ -68,12 +68,14 @@ pub fn create_audits_threaded(threads: i32, audits: i32) {
     );
 }
 
-pub fn show_audit_size() {
+pub fn show_audit_size(show_audit: bool) {
     let audit = create_fake_audit();
     let audit_vec = serde_json::to_vec(&audit).unwrap();
     let audit_json = serde_json::to_string(&audit).unwrap();
     println!("The audits that we're creating are {} bytes", audit_vec.len());
-    println!("{}", audit_json);
+    if show_audit {
+        println!("{}", audit_json);
+    }
 }
 
 #[allow(dead_code)]
@@ -99,18 +101,18 @@ fn create_audits_singly(audits: i32, thread_num: i32) {
     }
 }
 
-fn create_audits_grouped(audits: i32, thread_num: i32) {
+fn create_audits_grouped(audits: i32, thread_num: i32, verbose: bool) {
     let group_of_500_count = audits / 500;
     let remainder = audits % 500;
     for _ in 0..group_of_500_count {
-        create_audit_batch(500, thread_num);
+        create_audit_batch(500, thread_num, verbose);
     }
     if remainder > 0 {
-        create_audit_batch(remainder, thread_num);
+        create_audit_batch(remainder, thread_num, verbose);
     }
 }
 
-fn create_audit_batch(audits: i32, thread_num: i32) {
+fn create_audit_batch(audits: i32, thread_num: i32, verbose: bool) {
     let client = KinesisClient::simple(rusoto_core::region::Region::UsEast1);
     let res = client.put_records(&PutRecordsInput {
         stream_name: "audits_persisted_sandbox".to_string(),
@@ -120,7 +122,9 @@ fn create_audit_batch(audits: i32, thread_num: i32) {
                 ..Default::default()
             }).collect(),
     }).sync().expect(&format!("Kinesis put_records request on thread {}", thread_num));
-    println!("Created {} kinesis records from thread {}", res.records.len(), thread_num);
+    if verbose {
+        println!("Created {} kinesis records from thread {}", res.records.len(), thread_num);
+    }
 }
 
 
