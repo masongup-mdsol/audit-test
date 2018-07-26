@@ -15,6 +15,7 @@ Usage:
     audit-test show-audit-size [-v]
     audit-test retrieve-audits [--what-uris=<num>] [-v]
     audit-test (-h | --help)
+    audit-test --version
 
 Options:
     -h --help               Show this screen
@@ -22,6 +23,7 @@ Options:
     -a --audits=<num>       Number of audits to create per thread [default: 4]
     -u --what-uris=<num>    Number of audits for what_uris to fetch [default: 10]
     -v --verbose            Output more details
+    --version               Print the version
 ";
 
 #[derive(Debug, Deserialize)]
@@ -37,7 +39,7 @@ struct Args {
 
 fn main() {
     let args: Args = Docopt::new(USAGE)
-        .and_then(|d| d.deserialize())
+        .and_then(|d| d.version(Some("0.0.1".to_string())).help(true).deserialize())
         .unwrap_or_else(|e| e.exit());
 
     if args.cmd_create_audits {
