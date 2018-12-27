@@ -7,8 +7,10 @@ extern crate rand;
 
 use self::rusoto_kinesis::*;
 use self::uuid::Uuid;
-use self::rand::Rng;
+use self::rand::prelude::*;
+use self::rand::distributions::Alphanumeric;
 use std::thread;
+use std::path::PathBuf;
 
 #[derive(Debug, Serialize)]
 struct Audit {
@@ -44,7 +46,7 @@ struct Change {
     new: String,
 }
 
-pub fn create_audits_threaded(threads: i32, audits: i32, verbose: bool) {
+pub fn create_audits_threaded(threads: i32, audits: i32, verbose: bool, save_path_option: Option<PathBuf>) {
     let start_time = chrono::Local::now();
     println!("Starting create at {}", start_time.to_rfc2822());
 
@@ -52,8 +54,10 @@ pub fn create_audits_threaded(threads: i32, audits: i32, verbose: bool) {
         thread::spawn(move || { create_audits_grouped(audits, thread_num, verbose) })
     }).collect();
 
+    let mut all_uuids = vec![];
     for handle in thread_handles {
-        handle.join().unwrap();
+        let mut thread_uuuids = handle.join().unwrap();
+        all_uuids.append(&mut thread_uuuids);
     }
 
     let end_time = chrono::Local::now();
@@ -61,29 +65,37 @@ pub fn create_audits_threaded(threads: i32, audits: i32, verbose: bool) {
     let secs_duration = end_time.signed_duration_since(start_time).num_milliseconds() as f64 / 1000.0;
     let total_audits = threads * audits;
     println!(
-        "Created total of {} audits in {:.3} seconds, {:.3} audits/sec",
+        "Created total of {} audits in {:.3} seconds, {:.3} audits/sec, but {} worked",
         total_audits,
         secs_duration,
-        total_audits as f64 / secs_duration
+        total_audits as f64 / secs_duration,
+        all_uuids.len()
     );
+    if let Some(save_path) = save_path_option {
+        let mut file_contents: String = all_uuids.join("\n");
+        file_contents.push_str("\n");
+        std::fs::write(save_path, file_contents).expect("Unable to write to file");
+    }
 }
 
 pub fn show_audit_size(show_audit: bool) {
     let audit = create_fake_audit();
-    let audit_vec = serde_json::to_vec(&audit).unwrap();
-    let audit_json = serde_json::to_string(&audit).unwrap();
-    println!("The audits that we're creating are {} bytes", audit_vec.len());
     if show_audit {
+        let audit_json = serde_json::to_string(&audit).unwrap();
         println!("{}", audit_json);
+    }
+    else {
+        let audit_vec = serde_json::to_vec(&audit).unwrap();
+        println!("The audits that we're creating are {} bytes", audit_vec.len());
     }
 }
 
 #[allow(dead_code)]
 fn create_audits_singly(audits: i32, thread_num: i32) {
-    let client = KinesisClient::simple(rusoto_core::region::Region::UsEast1);
+    let client = KinesisClient::new(rusoto_core::region::Region::UsEast1);
     let mut write_count = 0;
     for _ in 0..audits {
-        let success = client.put_record(&PutRecordInput {
+        let success = client.put_record(PutRecordInput {
             stream_name: "audits_persisted_sandbox".to_string(),
             partition_key: Uuid::new_v4().to_string(),
             data: serde_json::to_vec(&create_fake_audit()).unwrap(),
@@ -101,30 +113,40 @@ fn create_audits_singly(audits: i32, thread_num: i32) {
     }
 }
 
-fn create_audits_grouped(audits: i32, thread_num: i32, verbose: bool) {
+fn create_audits_grouped(audits: i32, thread_num: i32, verbose: bool) -> Vec<String> {
     let group_of_500_count = audits / 500;
     let remainder = audits % 500;
+    let mut uuid_vec = vec![];
     for _ in 0..group_of_500_count {
-        create_audit_batch(500, thread_num, verbose);
+        uuid_vec.append(&mut create_audit_batch(500, thread_num, verbose));
     }
     if remainder > 0 {
-        create_audit_batch(remainder, thread_num, verbose);
+        uuid_vec.append(&mut create_audit_batch(remainder, thread_num, verbose));
     }
+    uuid_vec
 }
 
-fn create_audit_batch(audits: i32, thread_num: i32, verbose: bool) {
-    let client = KinesisClient::simple(rusoto_core::region::Region::UsEast1);
-    let res = client.put_records(&PutRecordsInput {
+fn create_audit_batch(audits: i32, thread_num: i32, verbose: bool) -> Vec<String> {
+    let client = KinesisClient::new(rusoto_core::region::Region::UsEast1);
+    let fake_audits: Vec<Audit> = (0..audits).map(|_| create_fake_audit()).collect();
+    let audit_uuids: Vec<String> = fake_audits.iter().map(|a| a.audit_uuid.clone()).collect();
+    let res = client.put_records(PutRecordsInput {
         stream_name: "audits_persisted_sandbox".to_string(),
-        records: (0..audits).map(|_| PutRecordsRequestEntry {
-                data: serde_json::to_vec(&create_fake_audit()).unwrap(),
-                partition_key: Uuid::new_v4().to_string(),
+        records: fake_audits.iter().map(|a| PutRecordsRequestEntry {
+                data: serde_json::to_vec(&a).unwrap(),
+                partition_key: a.audit_uuid.clone(),
                 ..Default::default()
             }).collect(),
     }).sync().expect(&format!("Kinesis put_records request on thread {}", thread_num));
     if verbose {
-        println!("Created {} kinesis records from thread {}", res.records.len(), thread_num);
+        println!("Created {} kinesis records from thread {}, {} failed",
+                 res.records.len(), thread_num, res.failed_record_count.unwrap_or(0)
+        );
     }
+    audit_uuids.into_iter().zip(res.records.into_iter())
+        .filter(|(_, kr)| kr.error_code.is_none())
+        .map(|(id, _)| id)
+        .collect()
 }
 
 
@@ -144,9 +166,13 @@ fn create_fake_audit() -> Audit {
 }
 
 fn create_fake_changes(count: i32) -> Vec<Change> {
+    fn rand_string(len: usize) -> String {
+        let mut rng = thread_rng();
+        std::iter::repeat(()).map(|()| rng.sample(Alphanumeric)).take(len).collect()
+    }
     (0..count).map(|num| Change {
         field: format!("field_{}", num),
-        old: rand::thread_rng().gen_ascii_chars().take(80).collect(),
-        new: rand::thread_rng().gen_ascii_chars().take(80).collect(),
+        old: rand_string(100),
+        new: rand_string(100),
     }).collect()
 }
