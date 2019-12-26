@@ -1,9 +1,9 @@
-extern crate rusoto_core;
-extern crate rusoto_kinesis;
-extern crate uuid;
-extern crate serde_json;
-extern crate chrono;
-extern crate rand;
+use rusoto_core;
+use rusoto_kinesis;
+use uuid;
+use serde_json;
+use chrono;
+use rand;
 
 use self::rusoto_kinesis::*;
 use self::uuid::Uuid;

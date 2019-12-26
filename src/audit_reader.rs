@@ -1,6 +1,6 @@
-extern crate rusoto_core;
-extern crate rusoto_dynamodb;
-extern crate chrono;
+use rusoto_core;
+use rusoto_dynamodb;
+use chrono;
 
 use self::rusoto_dynamodb::*;
 use std::collections::{HashSet, HashMap};
