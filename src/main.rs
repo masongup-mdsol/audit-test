@@ -7,6 +7,7 @@ use std::path::PathBuf;
 
 mod audit_creator;
 mod audit_reader;
+mod audit_sender;
 
 const USAGE: &str = "
 Audit Test
@@ -15,6 +16,8 @@ Usage:
     audit-test create-audits [--threads=<num>] [--audits=<num>] [--save-path=<path>] [-v]
     audit-test show-audit-size [-v]
     audit-test retrieve-audits [--what-uris=<num>] [--audit-id=<uuid>] [--load-path=<path>] [-v]
+    audit-test send-audits
+    audit-test test-crypto
     audit-test (-h | --help)
     audit-test --version
 
@@ -42,6 +45,8 @@ struct Args {
     cmd_create_audits: bool,
     cmd_show_audit_size: bool,
     cmd_retrieve_audits: bool,
+    cmd_send_audits: bool,
+    cmd_test_crypto: bool,
 }
 
 fn main() {
@@ -57,15 +62,21 @@ fn main() {
         audit_creator::show_audit_size(args.flag_verbose);
     }
     if args.cmd_retrieve_audits {
-        if args.flag_what_uris.is_some() {
-            audit_reader::retrieve_audits(args.flag_what_uris.unwrap().into(), args.flag_verbose);
+        if let Some(what_uris) = args.flag_what_uris {
+            audit_reader::retrieve_audits(what_uris.into(), args.flag_verbose);
         }
-        if args.flag_audit_id.is_some() {
-            audit_reader::retrieve_audit_by_id(args.flag_audit_id.unwrap());
+        if let Some(audit_id) = args.flag_audit_id {
+            audit_reader::retrieve_audit_by_id(audit_id);
         }
-        if args.flag_load_path.is_some() {
-            audit_reader::retrieve_by_ids_from_file(args.flag_load_path.unwrap());
+        if let Some(load_path) = args.flag_load_path {
+            audit_reader::retrieve_by_ids_from_file(load_path);
         }
+    }
+    if args.cmd_send_audits {
+        audit_sender::send_audits();
+    }
+    if args.cmd_test_crypto {
+        audit_sender::test_crypto();
     }
 }
 
