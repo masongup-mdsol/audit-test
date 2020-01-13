@@ -8,6 +8,7 @@ use std::path::PathBuf;
 mod audit_creator;
 mod audit_reader;
 mod audit_sender;
+mod mauth_client;
 
 const USAGE: &str = "
 Audit Test
@@ -76,7 +77,7 @@ fn main() {
         audit_sender::send_audits();
     }
     if args.cmd_test_crypto {
-        audit_sender::test_crypto();
+        mauth_client::test_crypto();
     }
 }
 
