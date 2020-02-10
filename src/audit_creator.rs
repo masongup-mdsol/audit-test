@@ -1,19 +1,19 @@
-use rusoto_core;
-use rusoto_kinesis;
-use uuid;
-use serde_json;
 use chrono;
 use rand;
+use rusoto_core;
+use rusoto_kinesis;
+use serde_json;
+use uuid;
 
+use self::rand::distributions::Alphanumeric;
+use self::rand::prelude::*;
 use self::rusoto_kinesis::*;
 use self::uuid::Uuid;
-use self::rand::prelude::*;
-use self::rand::distributions::Alphanumeric;
-use std::thread;
 use std::path::PathBuf;
+use std::thread;
 
 #[derive(Debug, Serialize)]
-struct Audit {
+pub struct Audit {
     audit_uuid: String,
     what_uri: String,
     where_uri: String,
@@ -21,6 +21,7 @@ struct Audit {
     when_audited: String,
     tags: Vec<String>,
     which_changed: WhichChanged,
+    consumer_index: String,
 }
 
 #[allow(non_camel_case_types)]
@@ -36,7 +37,7 @@ enum ChangeType {
 struct WhichChanged {
     #[serde(rename = "type")]
     audit_type: ChangeType,
-    changes: Vec<Change>
+    changes: Vec<Change>,
 }
 
 #[derive(Debug, Serialize)]
@@ -46,13 +47,18 @@ struct Change {
     new: String,
 }
 
-pub fn create_audits_threaded(threads: i32, audits: i32, verbose: bool, save_path_option: Option<PathBuf>) {
+pub fn create_audits_threaded(
+    threads: i32,
+    audits: i32,
+    verbose: bool,
+    save_path_option: Option<PathBuf>,
+) {
     let start_time = chrono::Local::now();
     println!("Starting create at {}", start_time.to_rfc2822());
 
-    let thread_handles: Vec<thread::JoinHandle<_>> = (0..threads).map(|thread_num| {
-        thread::spawn(move || { create_audits_grouped(audits, thread_num, verbose) })
-    }).collect();
+    let thread_handles: Vec<thread::JoinHandle<_>> = (0..threads)
+        .map(|thread_num| thread::spawn(move || create_audits_grouped(audits, thread_num, verbose)))
+        .collect();
 
     let mut all_uuids = vec![];
     for handle in thread_handles {
@@ -62,7 +68,10 @@ pub fn create_audits_threaded(threads: i32, audits: i32, verbose: bool, save_pat
 
     let end_time = chrono::Local::now();
     println!("Ending create at {}", end_time.to_rfc2822());
-    let secs_duration = end_time.signed_duration_since(start_time).num_milliseconds() as f64 / 1000.0;
+    let secs_duration = end_time
+        .signed_duration_since(start_time)
+        .num_milliseconds() as f64
+        / 1000.0;
     let total_audits = threads * audits;
     println!(
         "Created total of {} audits in {:.3} seconds, {:.3} audits/sec, but {} worked",
@@ -79,14 +88,16 @@ pub fn create_audits_threaded(threads: i32, audits: i32, verbose: bool, save_pat
 }
 
 pub fn show_audit_size(show_audit: bool) {
-    let audit = create_fake_audit();
+    let audit = Audit::create_fake_audit();
     if show_audit {
         let audit_json = serde_json::to_string(&audit).unwrap();
         println!("{}", audit_json);
-    }
-    else {
+    } else {
         let audit_vec = serde_json::to_vec(&audit).unwrap();
-        println!("The audits that we're creating are {} bytes", audit_vec.len());
+        println!(
+            "The audits that we're creating are {} bytes",
+            audit_vec.len()
+        );
     }
 }
 
@@ -95,19 +106,21 @@ fn create_audits_singly(audits: i32, thread_num: i32) {
     let client = KinesisClient::new(rusoto_core::region::Region::UsEast1);
     let mut write_count = 0;
     for _ in 0..audits {
-        let success = client.put_record(PutRecordInput {
-            stream_name: "audits_persisted_sandbox".to_string(),
-            partition_key: Uuid::new_v4().to_string(),
-            data: serde_json::to_vec(&create_fake_audit()).unwrap(),
-            ..Default::default()
-        }).sync().is_ok();
+        let success = client
+            .put_record(PutRecordInput {
+                stream_name: "audits_persisted_sandbox".to_string(),
+                partition_key: Uuid::new_v4().to_string(),
+                data: serde_json::to_vec(&Audit::create_fake_audit()).unwrap(),
+                ..Default::default()
+            })
+            .sync()
+            .is_ok();
         if success {
             write_count += 1;
             if write_count % 100 == 0 {
                 println!("Wrote {} audits from thread {}", write_count, thread_num);
             }
-        }
-        else {
+        } else {
             println!("A request failed");
         }
     }
@@ -128,51 +141,72 @@ fn create_audits_grouped(audits: i32, thread_num: i32, verbose: bool) -> Vec<Str
 
 fn create_audit_batch(audits: i32, thread_num: i32, verbose: bool) -> Vec<String> {
     let client = KinesisClient::new(rusoto_core::region::Region::UsEast1);
-    let fake_audits: Vec<Audit> = (0..audits).map(|_| create_fake_audit()).collect();
+    let fake_audits: Vec<Audit> = (0..audits).map(|_| Audit::create_fake_audit()).collect();
     let audit_uuids: Vec<String> = fake_audits.iter().map(|a| a.audit_uuid.clone()).collect();
-    let res = client.put_records(PutRecordsInput {
-        stream_name: "audits_persisted_sandbox".to_string(),
-        records: fake_audits.iter().map(|a| PutRecordsRequestEntry {
-                data: serde_json::to_vec(&a).unwrap(),
-                partition_key: a.audit_uuid.clone(),
-                ..Default::default()
-            }).collect(),
-    }).sync().expect(&format!("Kinesis put_records request on thread {}", thread_num));
+    let res = client
+        .put_records(PutRecordsInput {
+            stream_name: "audits_persisted_sandbox".to_string(),
+            records: fake_audits
+                .iter()
+                .map(|a| PutRecordsRequestEntry {
+                    data: serde_json::to_vec(&a).unwrap(),
+                    partition_key: a.audit_uuid.clone(),
+                    ..Default::default()
+                })
+                .collect(),
+        })
+        .sync()
+        .expect(&format!(
+            "Kinesis put_records request on thread {}",
+            thread_num
+        ));
     if verbose {
-        println!("Created {} kinesis records from thread {}, {} failed",
-                 res.records.len(), thread_num, res.failed_record_count.unwrap_or(0)
+        println!(
+            "Created {} kinesis records from thread {}, {} failed",
+            res.records.len(),
+            thread_num,
+            res.failed_record_count.unwrap_or(0)
         );
     }
-    audit_uuids.into_iter().zip(res.records.into_iter())
+    audit_uuids
+        .into_iter()
+        .zip(res.records.into_iter())
         .filter(|(_, kr)| kr.error_code.is_none())
         .map(|(id, _)| id)
         .collect()
 }
 
-
-fn create_fake_audit() -> Audit {
-    Audit {
-      audit_uuid: Uuid::new_v4().to_string(),
-      what_uri: format!("com:mdsol:test_items:{}", Uuid::new_v4().to_string()),
-      where_uri: format!("com:mdsol:test_items:{}", Uuid::new_v4().to_string()),
-      who_uri: "com:mdsol:apps:c775584c-7438-11e8-b836-c3b1435e3798".to_string(),
-      when_audited: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-      tags: vec![],
-      which_changed: WhichChanged {
-        audit_type: ChangeType::create,
-        changes: create_fake_changes(40),
-      }
+impl Audit {
+    pub fn create_fake_audit() -> Self {
+        Audit {
+            audit_uuid: Uuid::new_v4().to_string(),
+            what_uri: format!("com:mdsol:test_items:{}", Uuid::new_v4().to_string()),
+            where_uri: format!("com:mdsol:apps:{}", Uuid::new_v4().to_string()),
+            who_uri: "com:mdsol:apps:c775584c-7438-11e8-b836-c3b1435e3798".to_string(),
+            when_audited: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            consumer_index: "mason_test".to_string(),
+            tags: vec![],
+            which_changed: WhichChanged {
+                audit_type: ChangeType::update,
+                changes: Self::create_fake_changes(10),
+            },
+        }
     }
-}
 
-fn create_fake_changes(count: i32) -> Vec<Change> {
-    fn rand_string(len: usize) -> String {
-        let mut rng = thread_rng();
-        std::iter::repeat(()).map(|()| rng.sample(Alphanumeric)).take(len).collect()
+    fn create_fake_changes(count: i32) -> Vec<Change> {
+        fn rand_string(len: usize) -> String {
+            let mut rng = thread_rng();
+            std::iter::repeat(())
+                .map(|()| rng.sample(Alphanumeric))
+                .take(len)
+                .collect()
+        }
+        (0..count)
+            .map(|num| Change {
+                field: format!("field_{}", num),
+                old: rand_string(10),
+                new: rand_string(10),
+            })
+            .collect()
     }
-    (0..count).map(|num| Change {
-        field: format!("field_{}", num),
-        old: rand_string(100),
-        new: rand_string(100),
-    }).collect()
 }
