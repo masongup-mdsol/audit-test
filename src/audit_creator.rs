@@ -10,7 +10,9 @@ use self::rand::prelude::*;
 use self::rusoto_kinesis::*;
 use self::uuid::Uuid;
 use std::path::PathBuf;
-use std::thread;
+
+use futures::future;
+use tokio::fs;
 
 #[derive(Debug, Serialize)]
 pub struct Audit {
@@ -47,7 +49,7 @@ struct Change {
     new: String,
 }
 
-pub fn create_audits_threaded(
+pub async fn create_audits_threaded(
     threads: i32,
     audits: i32,
     verbose: bool,
@@ -56,15 +58,11 @@ pub fn create_audits_threaded(
     let start_time = chrono::Local::now();
     println!("Starting create at {}", start_time.to_rfc2822());
 
-    let thread_handles: Vec<thread::JoinHandle<_>> = (0..threads)
-        .map(|thread_num| thread::spawn(move || create_audits_grouped(audits, thread_num, verbose)))
-        .collect();
+    let all_future =
+        future::join_all((0..threads).map(|t_num| create_audits_grouped(audits, t_num, verbose)))
+            .await;
 
-    let mut all_uuids = vec![];
-    for handle in thread_handles {
-        let mut thread_uuuids = handle.join().unwrap();
-        all_uuids.append(&mut thread_uuuids);
-    }
+    let all_uuids: Vec<String> = all_future.into_iter().flat_map(|r| r).collect();
 
     let end_time = chrono::Local::now();
     println!("Ending create at {}", end_time.to_rfc2822());
@@ -83,7 +81,9 @@ pub fn create_audits_threaded(
     if let Some(save_path) = save_path_option {
         let mut file_contents: String = all_uuids.join("\n");
         file_contents.push_str("\n");
-        std::fs::write(save_path, file_contents).expect("Unable to write to file");
+        fs::write(save_path, file_contents)
+            .await
+            .expect("Unable to write to file");
     }
 }
 
@@ -102,7 +102,7 @@ pub fn show_audit_size(show_audit: bool) {
 }
 
 #[allow(dead_code)]
-fn create_audits_singly(audits: i32, thread_num: i32) {
+async fn create_audits_singly(audits: i32, thread_num: i32) {
     let client = KinesisClient::new(rusoto_core::region::Region::UsEast1);
     let mut write_count = 0;
     for _ in 0..audits {
@@ -110,10 +110,12 @@ fn create_audits_singly(audits: i32, thread_num: i32) {
             .put_record(PutRecordInput {
                 stream_name: "audits_persisted_sandbox".to_string(),
                 partition_key: Uuid::new_v4().to_string(),
-                data: serde_json::to_vec(&Audit::create_fake_audit()).unwrap(),
+                data: serde_json::to_vec(&Audit::create_fake_audit())
+                    .unwrap()
+                    .into(),
                 ..Default::default()
             })
-            .sync()
+            .await
             .is_ok();
         if success {
             write_count += 1;
@@ -126,20 +128,20 @@ fn create_audits_singly(audits: i32, thread_num: i32) {
     }
 }
 
-fn create_audits_grouped(audits: i32, thread_num: i32, verbose: bool) -> Vec<String> {
+async fn create_audits_grouped(audits: i32, thread_num: i32, verbose: bool) -> Vec<String> {
     let group_of_500_count = audits / 500;
     let remainder = audits % 500;
     let mut uuid_vec = vec![];
     for _ in 0..group_of_500_count {
-        uuid_vec.append(&mut create_audit_batch(500, thread_num, verbose));
+        uuid_vec.append(&mut create_audit_batch(500, thread_num, verbose).await);
     }
     if remainder > 0 {
-        uuid_vec.append(&mut create_audit_batch(remainder, thread_num, verbose));
+        uuid_vec.append(&mut create_audit_batch(remainder, thread_num, verbose).await);
     }
     uuid_vec
 }
 
-fn create_audit_batch(audits: i32, thread_num: i32, verbose: bool) -> Vec<String> {
+async fn create_audit_batch(audits: i32, thread_num: i32, verbose: bool) -> Vec<String> {
     let client = KinesisClient::new(rusoto_core::region::Region::UsEast1);
     let fake_audits: Vec<Audit> = (0..audits).map(|_| Audit::create_fake_audit()).collect();
     let audit_uuids: Vec<String> = fake_audits.iter().map(|a| a.audit_uuid.clone()).collect();
@@ -149,13 +151,13 @@ fn create_audit_batch(audits: i32, thread_num: i32, verbose: bool) -> Vec<String
             records: fake_audits
                 .iter()
                 .map(|a| PutRecordsRequestEntry {
-                    data: serde_json::to_vec(&a).unwrap(),
+                    data: serde_json::to_vec(&a).unwrap().into(),
                     partition_key: a.audit_uuid.clone(),
                     ..Default::default()
                 })
                 .collect(),
         })
-        .sync()
+        .await
         .expect(&format!(
             "Kinesis put_records request on thread {}",
             thread_num

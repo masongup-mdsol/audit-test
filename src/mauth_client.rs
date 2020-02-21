@@ -7,21 +7,19 @@ use std::fs;
 use base64;
 use chrono::prelude::*;
 use dirs;
-use futures::future::Future;
-use futures::stream::Stream;
 use hex;
+use hyper::body::HttpBody;
 use hyper::header::HeaderValue;
 use hyper::{Body, Client, Method, Request, Response};
 use hyper_tls::HttpsConnector;
 use openssl::pkey::{PKey, Private, Public};
-use openssl::rsa::{Rsa, Padding};
+use openssl::rsa::{Padding, Rsa};
 use ring::rand::SystemRandom;
 use ring::signature::{
     RsaKeyPair, UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA512, RSA_PKCS1_SHA512,
 };
 use serde_json;
 use sha2::{Digest, Sha512};
-use tokio::runtime::Runtime;
 use uuid::Uuid;
 
 const CONFIG_FILE: &str = ".mauth_config.yml";
@@ -159,7 +157,9 @@ impl MAuthInfo {
         let mut hasher = Sha512::default();
         hasher.input(string_to_sign.as_bytes());
         let mut sign_output = vec![0; self.openssl_private_key.size() as usize];
-        self.openssl_private_key.private_encrypt(&hasher.result(), &mut sign_output, Padding::PKCS1).unwrap();
+        self.openssl_private_key
+            .private_encrypt(&hasher.result(), &mut sign_output, Padding::PKCS1)
+            .unwrap();
         let signature = format!("MWS {}:{}", self.app_id, base64::encode(&sign_output));
 
         let headers = req.headers_mut();
@@ -177,16 +177,14 @@ impl MAuthInfo {
         let ts_diff = ts_num - Utc::now().timestamp();
         if ts_diff > 300 || ts_diff < -300 {
             Err(MAuthValidationError::InvalidTime)
-        }
-        else {
+        } else {
             Ok(())
         }
     }
 
     fn split_auth_string(auth_str: &str) -> Result<(Uuid, Vec<u8>), MAuthValidationError> {
         let header_pattern = vec![' ', ':', ';'];
-        let mut header_split = auth_str
-            .split(header_pattern.as_slice());
+        let mut header_split = auth_str.split(header_pattern.as_slice());
 
         let start_str = header_split
             .nth(0)
@@ -207,10 +205,21 @@ impl MAuthInfo {
         Ok((host_app_uuid, raw_signature))
     }
 
-    pub fn validate_response_v2(
+    async fn bytes_from_body(mut body: Body) -> Result<Vec<u8>, MAuthValidationError> {
+        let mut response_vec = vec![];
+        while let Some(chunk) = body.data().await {
+            response_vec.extend_from_slice(
+                chunk
+                    .map_err(|_| MAuthValidationError::ResponseProblem)?
+                    .as_ref(),
+            );
+        }
+        Ok(response_vec)
+    }
+
+    pub async fn validate_response_v2(
         &self,
         response: Response<Body>,
-        mut runtime: &mut Runtime,
     ) -> Result<String, MAuthValidationError> {
         let (parts, body) = response.into_parts();
         let resp_headers = parts.headers;
@@ -232,13 +241,7 @@ impl MAuthInfo {
         let (host_app_uuid, raw_signature) = Self::split_auth_string(&sig_header)?;
 
         //Compute response signing string
-        let body_raw: Vec<u8> = body
-            .collect()
-            .wait()
-            .map_err(|_| MAuthValidationError::ResponseProblem)?
-            .into_iter()
-            .flat_map(|chunk| chunk.into_bytes())
-            .collect();
+        let body_raw: Vec<u8> = Self::bytes_from_body(body).await?;
         let mut hasher = Sha512::default();
         hasher.input(&body_raw);
         let string_to_sign = format!(
@@ -249,40 +252,33 @@ impl MAuthInfo {
             &ts_str,
         );
 
-        match self.get_app_pub_key(&host_app_uuid, &mut runtime) {
+        match self.get_app_pub_key(&host_app_uuid).await {
             None => return Err(MAuthValidationError::KeyUnavailable),
             Some(pub_key) => {
-                    let ring_key = UnparsedPublicKey::new(
-                        &RSA_PKCS1_2048_8192_SHA512,
-                        bytes::Bytes::from(pub_key.public_key_to_der_pkcs1().unwrap()),
-                    );
-                    match ring_key.verify(&string_to_sign.as_bytes(), &raw_signature) {
-                        Ok(()) => {
-                            String::from_utf8(body_raw).map_err(|_| MAuthValidationError::InvalidBody)
-                        }
-                        Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
+                let ring_key = UnparsedPublicKey::new(
+                    &RSA_PKCS1_2048_8192_SHA512,
+                    bytes::Bytes::from(pub_key.public_key_to_der_pkcs1().unwrap()),
+                );
+                match ring_key.verify(&string_to_sign.as_bytes(), &raw_signature) {
+                    Ok(()) => {
+                        String::from_utf8(body_raw).map_err(|_| MAuthValidationError::InvalidBody)
+                    }
+                    Err(_) => Err(MAuthValidationError::SignatureVerifyFailure),
                 }
             }
         }
     }
 
-    pub fn validate_response_v1(
+    pub async fn validate_response_v1(
         &self,
         response: Response<Body>,
-        mut runtime: &mut Runtime,
     ) -> Result<String, MAuthValidationError> {
         let (parts, body) = response.into_parts();
         let resp_headers = parts.headers;
 
-        let body_raw: Vec<u8> = body
-            .collect()
-            .wait()
-            .map_err(|_| MAuthValidationError::ResponseProblem)?
-            .into_iter()
-            .flat_map(|chunk| chunk.into_bytes())
-            .collect();
-
-        let body_str = String::from_utf8(body_raw.clone()).map_err(|_| MAuthValidationError::InvalidBody)?;
+        let body_raw: Vec<u8> = Self::bytes_from_body(body).await?;
+        let body_str =
+            String::from_utf8(body_raw.clone()).map_err(|_| MAuthValidationError::InvalidBody)?;
         println!("Response body is {}", &body_str);
 
         for hkey in resp_headers.keys() {
@@ -318,14 +314,18 @@ impl MAuthInfo {
         let mut hasher2 = Sha512::default();
         hasher2.input(&string_to_sign.as_bytes());
         let sign_input = hasher2.result();
-        let pub_key = self.get_app_pub_key(&host_app_uuid, &mut runtime).ok_or(MAuthValidationError::KeyUnavailable)?;
+        let pub_key = self
+            .get_app_pub_key(&host_app_uuid)
+            .await
+            .ok_or(MAuthValidationError::KeyUnavailable)?;
         let mut sign_output = vec![0; self.openssl_private_key.size() as usize];
-        pub_key.public_decrypt(&raw_signature, &mut sign_output, Padding::PKCS1).unwrap();
+        pub_key
+            .public_decrypt(&raw_signature, &mut sign_output, Padding::PKCS1)
+            .unwrap();
 
         if sign_input.len() == sign_output.len() {
             Ok(body_str)
-        }
-        else {
+        } else {
             Err(MAuthValidationError::SignatureVerifyFailure)
         }
 
@@ -340,17 +340,12 @@ impl MAuthInfo {
         }*/
     }
 
-
-    fn get_app_pub_key(
-        &self,
-        app_uuid: &Uuid,
-        runtime: &mut Runtime,
-    ) -> Option<Rsa<Public>> {
+    async fn get_app_pub_key(&self, app_uuid: &Uuid) -> Option<Rsa<Public>> {
         let mut key_store = self.remote_key_store.borrow_mut();
         if let Some(pub_key) = key_store.get(&app_uuid) {
             return Some(pub_key.clone());
         }
-        let https = HttpsConnector::new(4).unwrap();
+        let https = HttpsConnector::new();
         let client = Client::builder().build::<_, hyper::Body>(https);
         let (get_body, body_digest) = MAuthInfo::build_body_with_digest("".to_string());
         let mut req = Request::new(get_body);
@@ -367,21 +362,13 @@ impl MAuthInfo {
         let uri = hyper::Uri::from_parts(uri_parts).unwrap();
         *req.uri_mut() = uri;
         self.sign_request_v2(&mut req, body_digest);
-        let mauth_response = runtime.block_on(client.request(req));
+        let mauth_response = client.request(req).await;
         match mauth_response {
             Err(_) => None,
             Ok(response) => {
-                let response_str = String::from_utf8(
-                    response
-                        .into_body()
-                        .collect()
-                        .wait()
-                        .unwrap()
-                        .into_iter()
-                        .flat_map(|chunk| chunk.into_bytes())
-                        .collect(),
-                )
-                .unwrap();
+                let response_str =
+                    String::from_utf8(Self::bytes_from_body(response.into_body()).await.unwrap())
+                        .unwrap();
                 let response_obj: serde_json::Value = serde_json::from_str(&response_str).unwrap();
                 let pub_key_str = response_obj
                     .pointer("/security_token/public_key_str")

@@ -7,7 +7,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use uuid::Uuid;
 
-pub fn retrieve_audits(what_uri_count: i64, verbose: bool) {
+use tokio::fs;
+
+pub async fn retrieve_audits(what_uri_count: i64, verbose: bool) {
     let client = DynamoDbClient::new(rusoto_core::region::Region::UsEast1);
 
     let scan_res = client
@@ -17,7 +19,7 @@ pub fn retrieve_audits(what_uri_count: i64, verbose: bool) {
             limit: Some(what_uri_count),
             ..Default::default()
         })
-        .sync()
+        .await
         .expect("Error in scan");
 
     let what_uri_uuid_set = scan_res
@@ -27,10 +29,10 @@ pub fn retrieve_audits(what_uri_count: i64, verbose: bool) {
         .map(|i| i.get("what_uri_uuid").unwrap().s.clone().unwrap())
         .collect();
 
-    audit_query_loop(&client, what_uri_uuid_set, verbose);
+    audit_query_loop(&client, what_uri_uuid_set, verbose).await;
 }
 
-pub fn retrieve_audit_by_id(audit_id: Uuid) {
+pub async fn retrieve_audit_by_id(audit_id: Uuid) {
     let client = DynamoDbClient::new(rusoto_core::region::Region::UsEast1);
 
     let item_result = client
@@ -49,7 +51,7 @@ pub fn retrieve_audit_by_id(audit_id: Uuid) {
             projection_expression: Some("when_audited".to_string()),
             ..Default::default()
         })
-        .sync()
+        .await
         .expect("Could not get");
 
     println!(
@@ -65,13 +67,12 @@ pub fn retrieve_audit_by_id(audit_id: Uuid) {
     );
 }
 
-pub fn retrieve_by_ids_from_file(file_path: PathBuf) {
-    let raw_file_data =
-        std::fs::read(&file_path).expect("Unable to read file");
+pub async fn retrieve_by_ids_from_file(file_path: PathBuf) {
+    let raw_file_data = fs::read(&file_path).await.expect("Unable to read file");
     let file_string = String::from_utf8_lossy(&raw_file_data);
     let mut audits_missing = false;
     for file_id_batch in file_string.lines().collect::<Vec<&str>>().chunks(100) {
-        if retrieve_many_audits_by_id(file_id_batch) {
+        if retrieve_many_audits_by_id(file_id_batch).await {
             audits_missing = true;
         }
     }
@@ -82,7 +83,7 @@ pub fn retrieve_by_ids_from_file(file_path: PathBuf) {
     }
 }
 
-fn retrieve_many_audits_by_id(audit_ids: &[&str]) -> bool {
+async fn retrieve_many_audits_by_id(audit_ids: &[&str]) -> bool {
     let client = DynamoDbClient::new(rusoto_core::region::Region::UsEast1);
 
     let num_audits = audit_ids.len();
@@ -117,7 +118,7 @@ fn retrieve_many_audits_by_id(audit_ids: &[&str]) -> bool {
             request_items: request_items,
             ..Default::default()
         })
-        .sync()
+        .await
         .unwrap();
     let num_responses = batch_result
         .responses
@@ -132,7 +133,11 @@ fn retrieve_many_audits_by_id(audit_ids: &[&str]) -> bool {
     num_responses != num_audits
 }
 
-fn audit_query_loop(client: &DynamoDbClient, what_uri_uuid_set: HashSet<String>, verbose: bool) {
+async fn audit_query_loop(
+    client: &DynamoDbClient,
+    what_uri_uuid_set: HashSet<String>,
+    verbose: bool,
+) {
     let mut total_retrieved = 0;
     let mut total_read_cap_units = 0.0;
 
@@ -145,7 +150,7 @@ fn audit_query_loop(client: &DynamoDbClient, what_uri_uuid_set: HashSet<String>,
         loop {
             let query_res = client
                 .query(build_query_input(item_uuid.clone(), exclusive_start_key))
-                .sync();
+                .await;
             match query_res {
                 Ok(result) => {
                     if let Some(mut response_vec) = result.items {
