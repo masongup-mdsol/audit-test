@@ -21,7 +21,7 @@ pub async fn send_audits() {
     *req.uri_mut() = uri.clone();
     let headers = req.headers_mut();
     headers.insert(CONTENT_TYPE, "application/json".parse().unwrap());
-    let mauth_info = MAuthInfo::from_default_file().expect("Failed trying to load mauth info");
+    let mauth_info = MAuthInfo::from_default_file().await.expect("Failed trying to load mauth info");
     mauth_info.sign_request_v2(&mut req, body_digest);
     match client.request(req).await {
         Err(err) => println!("Got error {}", err),

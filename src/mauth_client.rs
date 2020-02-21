@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::fs;
+//use std::fs;
 
 use base64;
 use chrono::prelude::*;
@@ -20,14 +20,15 @@ use ring::signature::{
 };
 use serde_json;
 use sha2::{Digest, Sha512};
+use tokio::fs;
 use uuid::Uuid;
 
 const CONFIG_FILE: &str = ".mauth_config.yml";
 
-pub fn test_crypto() {
+pub async fn test_crypto() {
     let mut priv_key_path = dirs::home_dir().unwrap();
     priv_key_path.push(".mauth_key");
-    let openssl_key = PKey::private_key_from_pem(&fs::read(&priv_key_path).unwrap()).unwrap();
+    let openssl_key = PKey::private_key_from_pem(&fs::read(&priv_key_path).await.unwrap()).unwrap();
     let ring_priv_key = RsaKeyPair::from_der(&openssl_key.private_key_to_der().unwrap()).unwrap();
     let mut signature = vec![0; ring_priv_key.public_modulus_len()];
     let message = "test string".as_bytes();
@@ -42,7 +43,7 @@ pub fn test_crypto() {
 
     let mut pub_key_path = dirs::home_dir().unwrap();
     pub_key_path.push(".mauth_key.pub");
-    let pub_key_data = fs::read(&pub_key_path).unwrap();
+    let pub_key_data = fs::read(&pub_key_path).await.unwrap();
     let pub_key = Rsa::public_key_from_pem(&pub_key_data).unwrap();
     let ring_pub_key = UnparsedPublicKey::new(
         &RSA_PKCS1_2048_8192_SHA512,
@@ -71,10 +72,10 @@ struct ConfigFileSection {
 }
 
 impl MAuthInfo {
-    pub fn from_default_file() -> Result<MAuthInfo, String> {
+    pub async fn from_default_file() -> Result<MAuthInfo, String> {
         let mut home = dirs::home_dir().unwrap();
         home.push(CONFIG_FILE);
-        let config_data = fs::read(&home).map_err(|_| "Couldn't open config file")?;
+        let config_data = fs::read(&home).await.map_err(|_| "Couldn't open config file")?;
 
         let section: ConfigFileSection = serde_yaml::from_slice::<serde_yaml::Value>(&config_data)
             .ok()
@@ -92,7 +93,7 @@ impl MAuthInfo {
         .parse()
         .map_err(|_| "Invalid config file format")?;
 
-        let pk_data = fs::read(&section.private_key_file).map_err(|_| "Couldn't open key file")?;
+        let pk_data = fs::read(&section.private_key_file).await.map_err(|_| "Couldn't open key file")?;
         let openssl_key = PKey::private_key_from_pem(&pk_data)
             .map_err(|e| format!("OpenSSL Key Load Error: {}", e))?;
         let der_key_data = openssl_key.private_key_to_der().unwrap();
