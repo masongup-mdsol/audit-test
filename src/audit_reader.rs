@@ -1,8 +1,4 @@
-use chrono;
-use rusoto_core;
-use rusoto_dynamodb;
-
-use self::rusoto_dynamodb::*;
+use rusoto_dynamodb::*;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -89,12 +85,12 @@ async fn retrieve_many_audits_by_id(audit_ids: &[&str]) -> bool {
     let num_audits = audit_ids.len();
     let table_name = "audits.sandbox";
     let keys = audit_ids
-        .into_iter()
+        .iter()
         .map(|id| {
             [(
                 "uuid".to_string(),
                 AttributeValue {
-                    s: Some(id.to_string()),
+                    s: Some((*id).to_string()),
                     ..Default::default()
                 },
             )]
@@ -115,7 +111,7 @@ async fn retrieve_many_audits_by_id(audit_ids: &[&str]) -> bool {
 
     let batch_result = client
         .batch_get_item(BatchGetItemInput {
-            request_items: request_items,
+            request_items,
             ..Default::default()
         })
         .await
@@ -203,7 +199,7 @@ fn build_query_input(
         index_name: Some("what_uri_uuid-when_audited-index".to_string()),
         key_condition_expression: Some("what_uri_uuid = :item_uuid".to_string()),
         select: Some("ALL_ATTRIBUTES".to_string()),
-        exclusive_start_key: exclusive_start_key,
+        exclusive_start_key,
         return_consumed_capacity: Some("INDEXES".to_string()),
         expression_attribute_values: Some(
             [(

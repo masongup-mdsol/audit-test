@@ -2,12 +2,8 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-//use std::fs;
 
-use base64;
 use chrono::prelude::*;
-use dirs;
-use hex;
 use hyper::body::HttpBody;
 use hyper::header::HeaderValue;
 use hyper::{Body, Client, Method, Request, Response};
@@ -18,7 +14,6 @@ use ring::rand::SystemRandom;
 use ring::signature::{
     RsaKeyPair, UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA512, RSA_PKCS1_SHA512,
 };
-use serde_json;
 use sha2::{Digest, Sha512};
 use tokio::fs;
 use uuid::Uuid;
@@ -31,12 +26,12 @@ pub async fn test_crypto() {
     let openssl_key = PKey::private_key_from_pem(&fs::read(&priv_key_path).await.unwrap()).unwrap();
     let ring_priv_key = RsaKeyPair::from_der(&openssl_key.private_key_to_der().unwrap()).unwrap();
     let mut signature = vec![0; ring_priv_key.public_modulus_len()];
-    let message = "test string".as_bytes();
+    let message = b"test string";
     ring_priv_key
         .sign(
             &RSA_PKCS1_SHA512,
             &SystemRandom::new(),
-            &message,
+            message,
             &mut signature,
         )
         .unwrap();
@@ -49,7 +44,7 @@ pub async fn test_crypto() {
         &RSA_PKCS1_2048_8192_SHA512,
         pub_key.public_key_to_der_pkcs1().unwrap(),
     );
-    match ring_pub_key.verify(&message, &signature) {
+    match ring_pub_key.verify(message, &signature) {
         Ok(()) => println!("Signature matches!"),
         Err(_) => println!("Failed to match signature"),
     }
@@ -111,7 +106,7 @@ impl MAuthInfo {
     pub fn build_body_with_digest(body: String) -> (Body, String) {
         let mut hasher = Sha512::default();
         hasher.input(body.as_bytes());
-        (Body::from(body.clone()), hex::encode(hasher.result()))
+        (Body::from(body), hex::encode(hasher.result()))
     }
 
     pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: String) {
@@ -188,18 +183,18 @@ impl MAuthInfo {
         let mut header_split = auth_str.split(header_pattern.as_slice());
 
         let start_str = header_split
-            .nth(0)
+            .next()
             .ok_or(MAuthValidationError::InvalidSignature)?;
         if start_str != "MWSV2" {
             return Err(MAuthValidationError::InvalidSignature);
         }
         let host_uuid_str = header_split
-            .nth(0)
+            .next()
             .ok_or(MAuthValidationError::InvalidSignature)?;
         let host_app_uuid =
             Uuid::parse_str(host_uuid_str).map_err(|_| MAuthValidationError::InvalidSignature)?;
         let signature_encoded_string = header_split
-            .nth(0)
+            .next()
             .ok_or(MAuthValidationError::InvalidSignature)?;
         let raw_signature: Vec<u8> = base64::decode(&signature_encoded_string)
             .map_err(|_| MAuthValidationError::InvalidSignature)?;
@@ -254,7 +249,7 @@ impl MAuthInfo {
         );
 
         match self.get_app_pub_key(&host_app_uuid).await {
-            None => return Err(MAuthValidationError::KeyUnavailable),
+            None => Err(MAuthValidationError::KeyUnavailable),
             Some(pub_key) => {
                 let ring_key = UnparsedPublicKey::new(
                     &RSA_PKCS1_2048_8192_SHA512,

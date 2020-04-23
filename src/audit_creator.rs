@@ -1,14 +1,7 @@
-use chrono;
-use rand;
-use rusoto_core;
-use rusoto_kinesis;
-use serde_json;
-use uuid;
-
-use self::rand::distributions::Alphanumeric;
-use self::rand::prelude::*;
-use self::rusoto_kinesis::*;
-use self::uuid::Uuid;
+use rand::distributions::Alphanumeric;
+use rand::prelude::*;
+use rusoto_kinesis::*;
+use uuid::Uuid;
 use std::path::PathBuf;
 
 use futures::future;
@@ -62,7 +55,7 @@ pub async fn create_audits_threaded(
         future::join_all((0..threads).map(|t_num| create_audits_grouped(audits, t_num, verbose)))
             .await;
 
-    let all_uuids: Vec<String> = all_future.into_iter().flat_map(|r| r).collect();
+    let all_uuids: Vec<String> = all_future.into_iter().flatten().collect();
 
     let end_time = chrono::Local::now();
     println!("Ending create at {}", end_time.to_rfc2822());
@@ -158,10 +151,7 @@ async fn create_audit_batch(audits: i32, thread_num: i32, verbose: bool) -> Vec<
                 .collect(),
         })
         .await
-        .expect(&format!(
-            "Kinesis put_records request on thread {}",
-            thread_num
-        ));
+        .unwrap_or_else(|_| panic!("Kinesis put_records request on thread {}", thread_num));
     if verbose {
         println!(
             "Created {} kinesis records from thread {}, {} failed",
