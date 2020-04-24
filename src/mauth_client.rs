@@ -10,6 +10,7 @@ use hyper::{Body, Client, Method, Request, Response};
 use hyper_tls::HttpsConnector;
 use openssl::pkey::{PKey, Private, Public};
 use openssl::rsa::{Padding, Rsa};
+use percent_encoding::{percent_encode, AsciiSet, NON_ALPHANUMERIC};
 use ring::rand::SystemRandom;
 use ring::signature::{
     RsaKeyPair, UnparsedPublicKey, RSA_PKCS1_2048_8192_SHA512, RSA_PKCS1_SHA512,
@@ -70,7 +71,9 @@ impl MAuthInfo {
     pub async fn from_default_file() -> Result<MAuthInfo, String> {
         let mut home = dirs::home_dir().unwrap();
         home.push(CONFIG_FILE);
-        let config_data = fs::read(&home).await.map_err(|_| "Couldn't open config file")?;
+        let config_data = fs::read(&home)
+            .await
+            .map_err(|_| "Couldn't open config file")?;
 
         let section: ConfigFileSection = serde_yaml::from_slice::<serde_yaml::Value>(&config_data)
             .ok()
@@ -88,7 +91,9 @@ impl MAuthInfo {
         .parse()
         .map_err(|_| "Invalid config file format")?;
 
-        let pk_data = fs::read(&section.private_key_file).await.map_err(|_| "Couldn't open key file")?;
+        let pk_data = fs::read(&section.private_key_file)
+            .await
+            .map_err(|_| "Couldn't open key file")?;
         let openssl_key = PKey::private_key_from_pem(&pk_data)
             .map_err(|e| format!("OpenSSL Key Load Error: {}", e))?;
         let der_key_data = openssl_key.private_key_to_der().unwrap();
@@ -111,13 +116,18 @@ impl MAuthInfo {
 
     pub fn sign_request_v2(&self, req: &mut Request<Body>, body_digest: String) {
         let timestamp_str = Utc::now().timestamp().to_string();
+        let encoded_query: String = req
+            .uri()
+            .query()
+            .map_or("".to_string(), |q| Self::encode_query(q));
         let string_to_sign = format!(
-            "{}\n{}\n{}\n{}\n{}\n",
+            "{}\n{}\n{}\n{}\n{}\n{}",
             req.method(),
             req.uri().path(),
             &body_digest,
             &self.app_id,
             &timestamp_str,
+            &encoded_query
         );
 
         let mut signature = vec![0; self.private_key.public_modulus_len()];
@@ -137,6 +147,23 @@ impl MAuthInfo {
             "MCC-Authentication",
             HeaderValue::from_str(&signature).unwrap(),
         );
+    }
+
+    const MAUTH_ENCODE_CHARS: &'static AsciiSet = &NON_ALPHANUMERIC
+        .remove(b'-').remove(b'_').remove(b'.').remove(b'~');
+
+    fn encode_query(qstr: &str) -> String {
+        let mut s: Vec<String> = qstr.split("&").map(|p| p.to_owned()).collect();
+        s.sort();
+        s.iter()
+            .map(|p| {
+                p.split("=")
+                    .map(|x| percent_encode(x.as_bytes(), Self::MAUTH_ENCODE_CHARS).to_string())
+                    .collect::<Vec<String>>()
+                    .join("=")
+            })
+            .collect::<Vec<String>>()
+            .join("&")
     }
 
     pub fn sign_request_v1(&self, req: &mut Request<Body>, body: String) {

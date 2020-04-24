@@ -27,3 +27,4 @@ serde_yaml = "*"
 futures = "*"
 tokio = { version = "*", features = ["full"] }
 openssl = "*"
+percent-encoding = "*"

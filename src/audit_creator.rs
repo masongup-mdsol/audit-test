@@ -1,8 +1,8 @@
 use rand::distributions::Alphanumeric;
 use rand::prelude::*;
 use rusoto_kinesis::*;
-use uuid::Uuid;
 use std::path::PathBuf;
+use uuid::Uuid;
 
 use futures::future;
 use tokio::fs;
