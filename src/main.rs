@@ -8,7 +8,6 @@ use uuid::Uuid;
 mod audit_creator;
 mod audit_reader;
 mod audit_sender;
-mod mauth_client;
 
 #[derive(StructOpt)]
 #[structopt(name = "Audit Test")]
@@ -38,14 +37,12 @@ enum AppCommands {
         verbose: bool,
     },
     SendAudits,
-    TestCrypto,
     DaltonTest,
 }
 
 #[tokio::main]
 async fn main() {
     match AppCommands::from_args() {
-        AppCommands::TestCrypto => mauth_client::test_crypto().await,
         AppCommands::SendAudits => audit_sender::send_audits().await,
         AppCommands::DaltonTest => audit_sender::dalton_test().await,
         AppCommands::ShowAuditSize { verbose } => audit_creator::show_audit_size(verbose),

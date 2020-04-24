@@ -4,7 +4,7 @@ use hyper_tls::HttpsConnector;
 use serde_json::json;
 
 use crate::audit_creator::Audit;
-use crate::mauth_client::MAuthInfo;
+use mauth_client_rust::MAuthInfo;
 
 pub async fn send_audits() {
     let https = HttpsConnector::new();

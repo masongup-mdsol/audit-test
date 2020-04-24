@@ -17,14 +17,7 @@ chrono = ">= 0.4.6"
 rand = ">= 0.6.1"
 hyper = ">= 0.12"
 hyper-tls = ">= 0.3.1"
-sha2 = ">= 0.7.1"
-hex = ">= 0.3.2"
-bytes = ">= 0.4.11"
-ring = "0.16.9"
-base64 = ">= 0.9.3"
-dirs = "2.0.2"
-serde_yaml = "*"
 futures = "*"
 tokio = { version = "*", features = ["full"] }
-openssl = "*"
-percent-encoding = "*"
+
+mauth-client-rust = { path = "../../../workspace/mauth-client-rust" }
