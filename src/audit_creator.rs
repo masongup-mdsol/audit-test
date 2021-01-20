@@ -188,10 +188,11 @@ impl Audit {
     fn create_fake_changes(count: i32) -> Vec<Change> {
         fn rand_string(len: usize) -> String {
             let mut rng = thread_rng();
-            std::iter::repeat(())
+            String::from_utf8(std::iter::repeat(())
                 .map(|()| rng.sample(Alphanumeric))
                 .take(len)
                 .collect()
+            ).unwrap()
         }
         (0..count)
             .map(|num| Change {

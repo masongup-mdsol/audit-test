@@ -19,5 +19,4 @@ hyper = ">= 0.12"
 hyper-tls = ">= 0.3.1"
 futures = "*"
 tokio = { version = "*", features = ["full"] }
-
-mauth-client-rust = { path = "../../../workspace/mauth-client-rust" }
+mauth-client = "*"
